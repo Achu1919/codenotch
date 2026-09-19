@@ -33,6 +33,24 @@ pub fn pct(fraction: f64) -> String {
     }
 }
 
+/// Counts are compacted where they are printed (651k, 1.1M): a menu line and a 56 px ring cannot
+/// hold seven digits, and Hermes's month is seven digits. Below 10 000 the digits stay verbatim —
+/// the Mac's rule for its counted figures — so no existing request count reads differently.
+pub fn compact(n: i64) -> String {
+    if n < 10_000 {
+        return n.to_string();
+    }
+    if n < 1_000_000 {
+        return format!("{}k", (n as f64 / 1000.0).round() as i64);
+    }
+    let millions = (n as f64 / 100_000.0).round() / 10.0;
+    if millions >= 100.0 {
+        format!("{millions:.0}M")
+    } else {
+        format!("{millions:.1}M")
+    }
+}
+
 /// "61% Used · 39% left". Both ends, because vendors disagree about which one they publish, and the
 /// left half is taken from the rounded used half so the two always add up on screen.
 pub fn used_left(w: &LimitWindow, lang: &str) -> String {
@@ -161,6 +179,9 @@ pub fn label(name: &str, lang: &str) -> String {
         ("ru", "5-hour Limit" | "5-Hour Limit") => "Лимит на 5 часов",
         ("ru", "Included usage") => "Включённое использование",
         ("ru", "API usage") => "Использование API",
+        ("ru", "5h limit") => "Лимит на 5 ч",
+        ("ru", "Tokens this month") => "Токенов за месяц",
+        ("ru", "Tokens today") => "Токенов сегодня",
         ("zh", "Current session") => "当前会话",
         ("zh", "Weekly (all models)") => "每周（全部模型）",
         ("zh", "Weekly (Opus)") => "每周（Opus）",
@@ -170,6 +191,9 @@ pub fn label(name: &str, lang: &str) -> String {
         ("zh", "5-hour Limit" | "5-Hour Limit") => "5 小时限额",
         ("zh", "Included usage") => "包含用量",
         ("zh", "API usage") => "API 用量",
+        ("zh", "5h limit") => "5 小时额度",
+        ("zh", "Tokens this month") => "本月 Token 用量",
+        ("zh", "Tokens today") => "今日 Token 用量",
         ("zh-Hant", "Current session") => "目前工作階段",
         ("zh-Hant", "Weekly (all models)") => "每週（全部模型）",
         ("zh-Hant", "Weekly (Opus)") => "每週（Opus）",
@@ -179,6 +203,9 @@ pub fn label(name: &str, lang: &str) -> String {
         ("zh-Hant", "5-hour Limit" | "5-Hour Limit") => "5 小時限額",
         ("zh-Hant", "Included usage") => "包含用量",
         ("zh-Hant", "API usage") => "API 用量",
+        ("zh-Hant", "5h limit") => "5 小時額度",
+        ("zh-Hant", "Tokens this month") => "本月 Token 用量",
+        ("zh-Hant", "Tokens today") => "今日 Token 用量",
         ("ja", "Current session") => "現在のセッション",
         ("ja", "Weekly (all models)") => "週間 (すべてのモデル)",
         ("ja", "Weekly (Opus)") => "週間 (Opus)",
@@ -188,6 +215,9 @@ pub fn label(name: &str, lang: &str) -> String {
         ("ja", "5-hour Limit" | "5-Hour Limit") => "5 時間の上限",
         ("ja", "Included usage") => "プラン内の使用量",
         ("ja", "API usage") => "API 使用量",
+        ("ja", "5h limit") => "5 時間の上限",
+        ("ja", "Tokens this month") => "今月のトークン",
+        ("ja", "Tokens today") => "今日のトークン",
         ("uk", "Current session") => "Поточна сесія",
         ("uk", "Weekly (all models)") => "Тижневий (усі моделі)",
         ("uk", "Weekly (Opus)") => "Тижневий (Opus)",
@@ -197,6 +227,9 @@ pub fn label(name: &str, lang: &str) -> String {
         ("uk", "5-hour Limit" | "5-Hour Limit") => "Ліміт 5 годин",
         ("uk", "Included usage") => "Використання в тарифі",
         ("uk", "API usage") => "Використання API",
+        ("uk", "5h limit") => "Ліміт 5 год",
+        ("uk", "Tokens this month") => "Токенів за місяць",
+        ("uk", "Tokens today") => "Токенів сьогодні",
         // Only these three in Korean: the Mac catalog has no Korean, so the names it shares
         // with the card have nothing to take.
         ("ko", "Weekly (all models)") => "주간 (모든 모델)",
@@ -211,10 +244,46 @@ pub fn label(name: &str, lang: &str) -> String {
 ///
 /// The fraction rather than a rounded percentage: Antigravity publishes lanes like 0.5 %, and a
 /// header reading 1 % above a line reading 0.5 % is the app contradicting itself.
-pub fn header(provider: &str, reading: Option<f64>, stale_since: Option<u64>, now: u64, lang: &str) -> String {
-    let value = reading.map(|f| format!("{}%", pct(f))).unwrap_or_else(|| "—".into());
-    // Under a minute is not worth saying. A provider that re-reads while still flagged stale would
-    // otherwise head every line with "0m ago", which reads as a fault rather than as an age.
+pub fn header(
+    provider: &str,
+    reading: Option<f64>,
+    stale_since: Option<u64>,
+    now: u64,
+    lang: &str,
+) -> String {
+    let value = reading
+        .map(|f| format!("{}%", pct(f)))
+        .unwrap_or_else(|| "—".into());
+    header_with(provider, value, stale_since, now, lang)
+}
+
+/// "Hermes — ~31.4M": the header for a provider whose headline window is a count rather than a
+/// percentage (Hermes's tokens; a bare Antigravity count).
+pub fn header_count(
+    provider: &str,
+    count: i64,
+    stale_since: Option<u64>,
+    now: u64,
+    lang: &str,
+) -> String {
+    header_with(
+        provider,
+        format!("~{}", compact(count)),
+        stale_since,
+        now,
+        lang,
+    )
+}
+
+/// Under a minute is not worth saying. A provider that re-reads while still flagged stale would
+/// otherwise head every line with "0m ago", which reads as a fault rather than as an age.
+fn header_with(
+    provider: &str,
+    value: String,
+    stale_since: Option<u64>,
+    now: u64,
+    lang: &str,
+) -> String {
     match stale_since.filter(|since| now.saturating_sub(*since) >= 60_000) {
         Some(since) => format!("{provider} — {value} · {}", ago(since, now, lang)),
         None => format!("{provider} — {value}"),
@@ -226,7 +295,12 @@ pub fn header(provider: &str, reading: Option<f64>, stale_since: Option<u64>, no
 pub fn window_line(w: &LimitWindow, now: u64, lang: &str) -> String {
     let name = label(&w.label, lang);
     if let Some(count) = w.count {
-        return format!("{name}: ~{count}");
+        // A counted window says how many there were; the unit comes from the provider ("tokens"
+        // for Hermes). Without one it keeps the app's own wording for Antigravity's requests.
+        return match &w.unit {
+            Some(unit) => format!("{name}: ~{} {unit}", compact(count)),
+            None => format!("{name}: ~{count}"),
+        };
     }
     let mut line = format!("{name}: {}", used_left(w, lang));
     if let Some(at) = w.resets_at {
@@ -351,6 +425,25 @@ mod tests {
     }
 
     #[test]
+    fn a_counted_token_window_carries_its_unit_and_is_compacted() {
+        let mut w = window("Tokens this month", 0.0, None);
+        w.count = Some(31_408_225);
+        w.unit = Some("tokens".into());
+        assert_eq!(window_line(&w, 0, "en"), "Tokens this month: ~31.4M tokens");
+    }
+
+    #[test]
+    fn counts_are_compacted_only_past_ten_thousand() {
+        assert_eq!(compact(0), "0");
+        assert_eq!(compact(9_999), "9999");
+        assert_eq!(compact(10_000), "10k");
+        assert_eq!(compact(651_000), "651k");
+        assert_eq!(compact(1_100_000), "1.1M");
+        assert_eq!(compact(31_408_225), "31.4M");
+        assert_eq!(compact(240_000_000), "240M");
+    }
+
+    #[test]
     fn a_header_carries_the_age_only_once_the_reading_is_old() {
         assert_eq!(header("Claude", Some(0.61), None, 0, "en"), "Claude — 61%");
         assert_eq!(header("Claude", Some(0.61), Some(0), 20 * MIN, "en"), "Claude — 61% · 20m ago");
@@ -389,9 +482,23 @@ mod tests {
     #[test]
     fn the_card_and_the_menu_agree_on_window_names() {
         let page = include_str!("../ui/notch.html");
-        for name in ["Current session", "Weekly (all models)", "Weekly (Opus)", "Weekly (model-scoped)",
-                     "Weekly limit", "Monthly limit", "Included usage", "API usage"] {
-            assert!(page.contains(&format!("'{name}'")), "notch.html no longer names {name:?}");
+        for name in [
+            "Current session",
+            "Weekly (all models)",
+            "Weekly (Opus)",
+            "Weekly (model-scoped)",
+            "Weekly limit",
+            "Monthly limit",
+            "Included usage",
+            "API usage",
+            "5h limit",
+            "Tokens this month",
+            "Tokens today",
+        ] {
+            assert!(
+                page.contains(&format!("'{name}'")),
+                "notch.html no longer names {name:?}"
+            );
             assert_ne!(label(name, "ru"), name, "{name:?} lost its Russian here");
         }
     }

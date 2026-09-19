@@ -35,13 +35,24 @@ fn menu_lines(app: &AppHandle, lang: &str) -> Vec<(String, String, bool)> {
         if snap.status == "absent" {
             continue;
         }
-        let head = traymenu::header(
-            crate::provider_label(id),
-            crate::ring_fraction(app, id),
-            traymenu::stale_since(&snap, now),
-            now,
-            lang,
-        );
+        // A counted headline (Hermes's tokens, a bare Antigravity count) prints the count; every
+        // other provider prints its ring's percentage.
+        let head = match crate::headline_count(app, id) {
+            Some(count) => traymenu::header_count(
+                crate::provider_label(id),
+                count,
+                traymenu::stale_since(&snap, now),
+                now,
+                lang,
+            ),
+            None => traymenu::header(
+                crate::provider_label(id),
+                crate::ring_fraction(app, id),
+                traymenu::stale_since(&snap, now),
+                now,
+                lang,
+            ),
+        };
         // Clicking a provider re-reads that one, as on the Mac.
         lines.push((format!("refresh:{id}"), head, true));
         for (n, line) in traymenu::provider_lines(&snap, now, lang).iter().enumerate() {
@@ -104,9 +115,14 @@ fn tooltip(app: &AppHandle) -> String {
         if crate::snapshot_of(app, id).status == "absent" {
             continue;
         }
-        let value = crate::ring_fraction(app, id)
-            .map(|f| format!("{}%", traymenu::pct(f)))
-            .unwrap_or_else(|| "—".into());
+        let value = match (
+            crate::ring_fraction(app, id),
+            crate::headline_count(app, id),
+        ) {
+            (_, Some(count)) => format!("~{}", traymenu::compact(count)),
+            (Some(f), None) => format!("{}%", traymenu::pct(f)),
+            (None, None) => "—".into(),
+        };
         parts.push(format!("{} {value}", crate::provider_label(id)));
     }
     if parts.is_empty() {

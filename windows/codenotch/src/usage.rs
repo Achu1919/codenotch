@@ -72,6 +72,10 @@ pub struct LimitWindow {
     /// The number is ours, not the vendor's (upstream fidelity=.derived) — the card adds a ~ prefix
     #[serde(default)]
     pub derived: bool,
+    /// How a counted window's number is labelled on the card and in the tray ("tokens"). None keeps
+    /// the app's own wording for counts (Antigravity's requests today).
+    #[serde(default)]
+    pub unit: Option<String>,
     /// The heading the window sits under on the card, for a provider that reports the same windows
     /// for several things (Antigravity: a 5-hour and a weekly lane per model family). None = ungrouped
     #[serde(default)]

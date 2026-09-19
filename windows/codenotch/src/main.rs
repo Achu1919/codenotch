@@ -1,29 +1,31 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
+mod activity;
+mod agy_cli;
+mod antigravity;
 mod autostart;
+mod codex;
 mod config;
+mod cursor;
+mod diag;
 mod doctor;
+mod dropzones;
 mod focus;
+mod glyphs;
+mod grok;
+mod hermes;
 mod hooks_install;
 mod i18n;
 mod notchmenu;
+mod opencode;
 mod server;
+mod settings_window;
 mod state;
 mod tray;
+mod trayicon;
 mod traymenu;
 mod usage;
-mod codex;
-mod cursor;
-mod grok;
-mod antigravity;
-mod agy_cli;
-mod glyphs;
-mod trayicon;
-mod activity;
-mod diag;
-mod dropzones;
 mod watcher;
-mod settings_window;
 
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -32,11 +34,12 @@ use tauri::{AppHandle, Emitter, Manager};
 /// and its tail on the left. `fitZoom` in ui/notch.html divides by the same width.
 pub const NOTCH_W: f64 = 360.0;
 /// Hand-bumped build tag, written to run.log at startup so a log can always be matched to the exe that wrote it.
-pub const BUILD: &str = "r31";
-pub const NOTCH_H: f64 = 520.0; // 300 clipped the card once it held three window blocks plus the session list; 460 clipped Antigravity's two model groups once the reading was stale and an agent was working
-/// Height of the upright window. Five cells make a 504 px pill; its fillets add 38.7 px at each end
-/// and the settings orb reaches 28.5 px past the far one, so 520 cut both fillets and hid the orb.
-pub const NOTCH_UPRIGHT_H: f64 = 650.0;
+pub const BUILD: &str = "r32-achu1";
+pub const NOTCH_H: f64 = 660.0; // 300 clipped the card once it held three window blocks plus the session list; 460 clipped Antigravity's two model groups once the reading was stale and an agent was working; 660 lets seven rings lie flat (646.4 px) without clipping the fillets or the orb
+/// Height of the upright window. Seven cells make a 694 px pill; its fillets add 38.7 px at each end
+/// and the settings orb reaches 28.5 px past the far one, so 840 holds the lot — 650 was sized for
+/// five and cut both fillets and the orb once a sixth and seventh provider were on.
+pub const NOTCH_UPRIGHT_H: f64 = 840.0;
 
 pub struct AppState {
     pub store: Mutex<state::Store>,
@@ -47,6 +50,10 @@ pub struct AppState {
     pub cursor: Mutex<usage::UsageSnapshot>,
     /// Grok Build credits, read from the Grok CLI's own session
     pub grok: Mutex<usage::UsageSnapshot>,
+    /// OpenCode Go plan windows, read from OpenCode's own usage endpoint with the key it stores
+    pub opencode: Mutex<usage::UsageSnapshot>,
+    /// Tokens the Hermes agent recorded for itself, counted from its own databases
+    pub hermes: Mutex<usage::UsageSnapshot>,
     pub antigravity: Mutex<usage::UsageSnapshot>,
     /// Provider glyph cache, collected at launch and again on a tray refresh
     pub glyphs: Mutex<std::collections::HashMap<String, glyphs::Glyph>>,
@@ -74,7 +81,12 @@ pub fn broadcast(app: &AppHandle) {
     let snap = {
         let store = st.store.lock().unwrap();
         let cfg = st.cfg.lock().unwrap();
-        store.snapshot(&cfg.lang, &resolved_lang(&cfg.lang), i18n::clock_24h(), false)
+        store.snapshot(
+            &cfg.lang,
+            &resolved_lang(&cfg.lang),
+            i18n::clock_24h(),
+            false,
+        )
     };
     let _ = app.emit("state", &snap);
 }
@@ -103,7 +115,12 @@ impl Screen {
             w: m.size().width as i32,
             h: m.size().height as i32,
             scale: m.scale_factor(),
-            work: (wa.position.x, wa.position.y, wa.size.width as i32, wa.size.height as i32),
+            work: (
+                wa.position.x,
+                wa.position.y,
+                wa.size.width as i32,
+                wa.size.height as i32,
+            ),
         }
     }
     /// Where the notch may sit. Falls back to the whole monitor if the platform reports no usable
@@ -134,7 +151,10 @@ pub fn screens(app: &AppHandle) -> Vec<Screen> {
     if let Ok(all) = w.available_monitors() {
         for m in all {
             let s = Screen::of(&m);
-            if !out.iter().any(|o| o.name == s.name && o.x == s.x && o.y == s.y) {
+            if !out
+                .iter()
+                .any(|o| o.name == s.name && o.x == s.x && o.y == s.y)
+            {
                 out.push(s);
             }
         }
@@ -151,7 +171,10 @@ fn target_screen(app: &AppHandle) -> Option<Screen> {
     };
     let list = screens(app);
     if let Some(name) = want {
-        if let Some(s) = list.iter().find(|s| s.name.as_deref() == Some(name.as_str())) {
+        if let Some(s) = list
+            .iter()
+            .find(|s| s.name.as_deref() == Some(name.as_str()))
+        {
             return Some(s.clone());
         }
     }
@@ -253,9 +276,18 @@ pub fn place_notch(app: &AppHandle) {
         let (x, y) = edge_origin(&mon, &edge, ww, wh, ratio);
         let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
         let mut placed = (x, y, ww, wh);
-        if w.outer_size().map(|s| s.width != target.width).unwrap_or(false) {
+        if w.outer_size()
+            .map(|s| s.width != target.width)
+            .unwrap_or(false)
+        {
             let _ = w.set_size(target);
-            let (x, y) = edge_origin(&mon, &edge, target.width as i32, target.height as i32, ratio);
+            let (x, y) = edge_origin(
+                &mon,
+                &edge,
+                target.width as i32,
+                target.height as i32,
+                ratio,
+            );
             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
             placed = (x, y, target.width as i32, target.height as i32);
         }
@@ -264,7 +296,8 @@ pub fn place_notch(app: &AppHandle) {
         // Nor can it see the taskbar: a card opened near the bottom of a side edge slid under it.
         // The page is `size` × the monitor scale smaller than the window in CSS px.
         let css = (ms * size).max(0.01);
-        let insets = work_insets(&mon, placed.0, placed.1, placed.2, placed.3).map(|v| v as f64 / css);
+        let insets =
+            work_insets(&mon, placed.0, placed.1, placed.2, placed.3).map(|v| v as f64 / css);
         *NOTCH_INSETS.lock().unwrap() = insets;
         let _ = w.emit("notch_insets", insets);
         // Placement log line: the first thing to check when the notch is not visible. Appended, not
@@ -321,7 +354,11 @@ pub fn reset_bar(app: &AppHandle) {
     let stranded = {
         let st = app.state::<AppState>();
         let want = st.cfg.lock().unwrap().notch_monitor.clone();
-        want.is_some_and(|name| !screens(app).iter().any(|s| s.name.as_deref() == Some(name.as_str())))
+        want.is_some_and(|name| {
+            !screens(app)
+                .iter()
+                .any(|s| s.name.as_deref() == Some(name.as_str()))
+        })
     };
     {
         let st = app.state::<AppState>();
@@ -449,7 +486,9 @@ fn drag_begin(app: AppHandle) {
             DRAGGING.store(false, std::sync::atomic::Ordering::SeqCst);
             return;
         };
-        let (Ok(start_cur), Ok(start_pos), Ok(size)) = (app.cursor_position(), w.outer_position(), w.outer_size()) else {
+        let (Ok(start_cur), Ok(start_pos), Ok(size)) =
+            (app.cursor_position(), w.outer_position(), w.outer_size())
+        else {
             DRAGGING.store(false, std::sync::atomic::Ordering::SeqCst);
             return;
         };
@@ -460,7 +499,10 @@ fn drag_begin(app: AppHandle) {
         }
         let (ww, wh) = (size.width as i32, size.height as i32);
         // The whole desktop, so the window can be carried across monitors before it is dropped
-        let (vx0, vy0) = (all.iter().map(|s| s.x).min().unwrap(), all.iter().map(|s| s.y).min().unwrap());
+        let (vx0, vy0) = (
+            all.iter().map(|s| s.x).min().unwrap(),
+            all.iter().map(|s| s.y).min().unwrap(),
+        );
         let (vx1, vy1) = (
             all.iter().map(|s| s.x + s.w).max().unwrap(),
             all.iter().map(|s| s.y + s.h).max().unwrap(),
@@ -472,8 +514,10 @@ fn drag_begin(app: AppHandle) {
                 break;
             }
             if let Ok(cur) = app.cursor_position() {
-                let nx = ((start_pos.x as f64 + (cur.x - start_cur.x)).round() as i32).clamp(vx0, (vx1 - ww).max(vx0));
-                let ny = ((start_pos.y as f64 + (cur.y - start_cur.y)).round() as i32).clamp(vy0, (vy1 - wh).max(vy0));
+                let nx = ((start_pos.x as f64 + (cur.x - start_cur.x)).round() as i32)
+                    .clamp(vx0, (vx1 - ww).max(vx0));
+                let ny = ((start_pos.y as f64 + (cur.y - start_cur.y)).round() as i32)
+                    .clamp(vy0, (vy1 - wh).max(vy0));
                 if nx != last_x || ny != last_y {
                     last_x = nx;
                     last_y = ny;
@@ -498,7 +542,11 @@ fn drag_begin(app: AppHandle) {
                 ("top", (cy - mon.y).max(0)),
                 ("bottom", (mon.y + mon.h - cy).max(0)),
             ];
-            let edge = d.iter().min_by_key(|(_, v)| *v).map(|(e, _)| *e).unwrap_or("right");
+            let edge = d
+                .iter()
+                .min_by_key(|(_, v)| *v)
+                .map(|(e, _)| *e)
+                .unwrap_or("right");
             // Measured against the work area, because that is the span `edge_origin` reads the ratio
             // back against: on the monitor's, a drop next to the taskbar landed short of the pointer.
             let (ax, ay, aw, ah) = mon.area();
@@ -552,7 +600,12 @@ pub fn apply_lang(app: &AppHandle, lang: &str) {
 fn get_state(state: tauri::State<AppState>) -> state::Snapshot {
     let store = state.store.lock().unwrap();
     let cfg = state.cfg.lock().unwrap();
-    store.snapshot(&cfg.lang, &resolved_lang(&cfg.lang), i18n::clock_24h(), false)
+    store.snapshot(
+        &cfg.lang,
+        &resolved_lang(&cfg.lang),
+        i18n::clock_24h(),
+        false,
+    )
 }
 
 #[tauri::command]
@@ -573,6 +626,8 @@ pub(crate) fn refresh_provider(app: &AppHandle, provider: &str) -> bool {
         "codex" => codex::request_refresh(),
         "cursor" => cursor::request_refresh(),
         "grok" => grok::request_refresh(),
+        "opencode" => opencode::request_refresh(),
+        "hermes" => hermes::request_refresh(),
         "gemini" => antigravity::request_refresh(),
         _ => return false,
     }
@@ -618,7 +673,10 @@ pub fn reload_glyphs(app: &AppHandle) {
 
 #[tauri::command]
 fn open_data_dir() {
-    let dir = config::config_path().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let dir = config::config_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
     let _ = std::fs::create_dir_all(glyphs::user_dir());
     let mut cmd = std::process::Command::new("explorer");
     cmd.arg(dir.as_os_str());
@@ -633,6 +691,16 @@ fn open_data_dir() {
 #[tauri::command]
 fn get_grok(state: tauri::State<AppState>) -> usage::UsageSnapshot {
     state.grok.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_opencode(state: tauri::State<AppState>) -> usage::UsageSnapshot {
+    state.opencode.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_hermes(state: tauri::State<AppState>) -> usage::UsageSnapshot {
+    state.hermes.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -652,13 +720,20 @@ pub(crate) fn provider_page(provider: &str) -> Option<(&'static str, &'static st
         "codex" => ("https://chatgpt.com/#settings/Account", "chatgpt.com"),
         "cursor" => ("https://cursor.com/dashboard", "cursor.com"),
         "grok" => ("https://grok.com/?_s=usage", "grok.com"),
+        "opencode" => ("https://opencode.ai", "opencode.ai"),
+        "hermes" => (
+            "https://hermes-agent.nousresearch.com/docs",
+            "nousresearch.com",
+        ),
         "gemini" => ("https://antigravity.google", "antigravity.google"),
         _ => return None,
     })
 }
 
 pub(crate) fn open_provider_page(provider: &str) {
-    let Some((url, _)) = provider_page(provider) else { return };
+    let Some((url, _)) = provider_page(provider) else {
+        return;
+    };
     let mut cmd = std::process::Command::new("cmd");
     cmd.args(["/C", "start", "", url]);
     #[cfg(windows)]
@@ -697,7 +772,9 @@ fn set_hot(rects: Vec<[f64; 4]>, expanded: bool) {
 /// that sets both is the only route. Clearing it again is safe — the notch is not otherwise layered
 /// (its transparency is DWM composition), so the window returns to the styles it had.
 fn set_click_through(app: &AppHandle, on: bool) {
-    let Some(w) = app.get_webview_window("notch") else { return };
+    let Some(w) = app.get_webview_window("notch") else {
+        return;
+    };
     let _ = w.set_ignore_cursor_events(on);
 }
 
@@ -732,11 +809,16 @@ pub fn applog(line: &str) {
     use std::io::Write;
     let log = config::config_path().with_file_name("run.log");
     // Past the cap the log starts again rather than growing for as long as the app runs.
-    let full = std::fs::metadata(&log).map(|m| m.len() > RUN_LOG_MAX_BYTES).unwrap_or(false);
+    let full = std::fs::metadata(&log)
+        .map(|m| m.len() > RUN_LOG_MAX_BYTES)
+        .unwrap_or(false);
     let opened = if full {
         std::fs::File::create(&log)
     } else {
-        std::fs::OpenOptions::new().create(true).append(true).open(&log)
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
     };
     if let Ok(mut f) = opened {
         let _ = writeln!(f, "{line}");
@@ -750,7 +832,9 @@ pub fn applog(line: &str) {
 /// scale, set_zoom pulls the effective DPR back to that scale, restoring the 340 px width.
 #[tauri::command]
 fn report_dpr(app: AppHandle, dpr: f64, w: f64, h: f64) {
-    let Some(win) = app.get_webview_window("notch") else { return };
+    let Some(win) = app.get_webview_window("notch") else {
+        return;
+    };
     let want = target_screen(&app)
         .map(|s| s.scale)
         .unwrap_or_else(|| win.scale_factor().unwrap_or(1.0))
@@ -842,13 +926,20 @@ fn start_pointer_watchdog(app: AppHandle) {
         let mut click_through: Option<bool> = None;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(WATCHDOG_MS));
-            let Some(w) = app.get_webview_window("notch") else { continue };
-            let (Ok(pos), Ok(cur)) = (w.outer_position(), app.cursor_position()) else { continue };
+            let Some(w) = app.get_webview_window("notch") else {
+                continue;
+            };
+            let (Ok(pos), Ok(cur)) = (w.outer_position(), app.cursor_position()) else {
+                continue;
+            };
             let rects = HOT.lock().unwrap().clone();
             // Cursor position relative to the window's top-left, in physical pixels; the hot rectangles are physical too, so no scale conversion
             let lx = cur.x - pos.x as f64;
             let ly = cur.y - pos.y as f64;
-            let size = w.outer_size().ok().map(|s| (s.width as f64, s.height as f64));
+            let size = w
+                .outer_size()
+                .ok()
+                .map(|s| (s.width as f64, s.height as f64));
             let inside = cursor_in_hot(&rects, lx, ly, size);
 
             if click_through != Some(!inside) {
@@ -856,7 +947,11 @@ fn start_pointer_watchdog(app: AppHandle) {
                 click_through = Some(!inside);
                 applog(&format!(
                     "click-through {} at cursor_rel=({lx:.0},{ly:.0}) rects={rects:?}",
-                    if inside { "off (cursor on the notch)" } else { "on (cursor elsewhere)" }
+                    if inside {
+                        "off (cursor on the notch)"
+                    } else {
+                        "on (cursor elsewhere)"
+                    }
                 ));
             }
 
@@ -889,7 +984,10 @@ fn start_pointer_watchdog(app: AppHandle) {
 /// Log channel for the page: JS writes key diagnostics into run.log (if invoke itself fails, the page reports on screen instead)
 #[tauri::command]
 fn log_js(msg: String) {
-    applog(&format!("js: {}", msg.chars().take(600).collect::<String>()));
+    applog(&format!(
+        "js: {}",
+        msg.chars().take(600).collect::<String>()
+    ));
 }
 
 #[tauri::command]
@@ -992,6 +1090,9 @@ fn ring_window<'a>(
         "codex" => windows.first(),
         "cursor" => by_id("included").or_else(|| by_id("api")),
         "grok" => by_id("credits").or_else(|| windows.first()),
+        "opencode" => by_id("rolling").or_else(|| windows.first()),
+        // Hermes publishes no allowance: the ring's headline is the counted month
+        "hermes" => by_id("month").or_else(|| windows.first()),
         _ => antigravity_lane(windows, antigravity_limit, antigravity_model),
     }
 }
@@ -1005,7 +1106,11 @@ fn antigravity_lane<'a>(
     model: &str,
 ) -> Option<&'a usage::LimitWindow> {
     let family: Vec<_> = windows.iter().filter(|w| lane_family(w) == model).collect();
-    let lanes = if family.is_empty() { windows.iter().collect() } else { family };
+    let lanes = if family.is_empty() {
+        windows.iter().collect()
+    } else {
+        family
+    };
     if limit != "automatic" {
         if let Some(w) = tightest(lanes.iter().copied().filter(|w| lane_is(w, limit))) {
             return Some(w);
@@ -1033,9 +1138,16 @@ fn lane_is(w: &usage::LimitWindow, limit: &str) -> bool {
     let text = format!("{} {}", w.id, w.label).to_lowercase();
     match limit {
         "weekly" => text.contains("weekly"),
-        _ => ["5h", "5-hour", "five hour", "five-hour", "hourly", "session"]
-            .iter()
-            .any(|k| text.contains(k)),
+        _ => [
+            "5h",
+            "5-hour",
+            "five hour",
+            "five-hour",
+            "hourly",
+            "session",
+        ]
+        .iter()
+        .any(|k| text.contains(k)),
     }
 }
 
@@ -1046,6 +1158,8 @@ pub(crate) fn snapshot_of(app: &AppHandle, id: &str) -> usage::UsageSnapshot {
         "codex" => st.codex.lock().unwrap().clone(),
         "cursor" => st.cursor.lock().unwrap().clone(),
         "grok" => st.grok.lock().unwrap().clone(),
+        "opencode" => st.opencode.lock().unwrap().clone(),
+        "hermes" => st.hermes.lock().unwrap().clone(),
         "gemini" => st.antigravity.lock().unwrap().clone(),
         _ => st.usage.lock().unwrap().clone(),
     }
@@ -1083,6 +1197,22 @@ pub(crate) fn ring_pct(app: &AppHandle, provider: &str) -> Option<u32> {
         .map(|w| (w.used * 100.0).round().clamp(0.0, 100.0) as u32)
 }
 
+/// The count of the provider's ring window when that window is a counted one — a number with no
+/// published denominator (Hermes's tokens; Antigravity's bare count). The tray and its tooltip
+/// print it where a percentage would otherwise be a dash.
+pub(crate) fn headline_count(app: &AppHandle, provider: &str) -> Option<i64> {
+    let snap = snapshot_of(app, provider);
+    if snap.status == "absent" {
+        return None;
+    }
+    let (limit, model) = {
+        let st = app.state::<AppState>();
+        let c = st.cfg.lock().unwrap();
+        (c.antigravity_limit.clone(), c.antigravity_model.clone())
+    };
+    ring_window(provider, &snap.windows, &limit, &model).and_then(|w| w.count)
+}
+
 /// One provider and its ring's current number, for the settings window's picker.
 #[derive(serde::Serialize)]
 struct TrayOption {
@@ -1116,7 +1246,10 @@ struct AntigravityPrefs {
 fn get_antigravity_prefs(app: AppHandle) -> AntigravityPrefs {
     let st = app.state::<AppState>();
     let c = st.cfg.lock().unwrap();
-    AntigravityPrefs { limit: c.antigravity_limit.clone(), model: c.antigravity_model.clone() }
+    AntigravityPrefs {
+        limit: c.antigravity_limit.clone(),
+        model: c.antigravity_model.clone(),
+    }
 }
 
 /// Unknown values are refused rather than stored. The notch draws its own rings, so it is told.
@@ -1132,7 +1265,10 @@ fn set_antigravity_prefs(app: AppHandle, limit: String, model: String) -> Antigr
             c.antigravity_model = model;
         }
         config::save(&c);
-        AntigravityPrefs { limit: c.antigravity_limit.clone(), model: c.antigravity_model.clone() }
+        AntigravityPrefs {
+            limit: c.antigravity_limit.clone(),
+            model: c.antigravity_model.clone(),
+        }
     };
     let _ = app.emit("antigravity_prefs", &prefs);
     tray::refresh_menu(&app);
@@ -1180,7 +1316,10 @@ struct UiFlags {
 fn get_ui_flags(app: AppHandle) -> UiFlags {
     let st = app.state::<AppState>();
     let c = st.cfg.lock().unwrap();
-    UiFlags { notch_visible: c.notch_visible, tray_visible: c.tray_visible }
+    UiFlags {
+        notch_visible: c.notch_visible,
+        tray_visible: c.tray_visible,
+    }
 }
 
 /// Hiding both would leave the app running with nothing to click, so the tray icon is kept
@@ -1194,7 +1333,10 @@ fn set_ui_flags(app: AppHandle, notch_visible: bool, tray_visible: bool) -> UiFl
         c.notch_visible = notch_visible;
         c.tray_visible = if notch_visible { tray_visible } else { true };
         config::save(&c);
-        UiFlags { notch_visible: c.notch_visible, tray_visible: c.tray_visible }
+        UiFlags {
+            notch_visible: c.notch_visible,
+            tray_visible: c.tray_visible,
+        }
     };
     apply_visibility(&app);
     flags
@@ -1347,7 +1489,11 @@ fn get_monitors(app: AppHandle) -> Vec<MonitorInfo> {
             label: format!("{}  {} × {}", i + 1, s.w, s.h),
             primary: i == 0,
             // With no explicit choice the primary monitor is the one in use
-            current: if want.is_some() { s.name == chosen } else { i == 0 },
+            current: if want.is_some() {
+                s.name == chosen
+            } else {
+                i == 0
+            },
         })
         .collect()
 }
@@ -1383,13 +1529,17 @@ pub fn provider_label(id: &str) -> &'static str {
         "codex" => "Codex",
         "cursor" => "Cursor",
         "grok" => "Grok",
+        "opencode" => "OpenCode",
+        "hermes" => "Hermes",
         "gemini" => "Antigravity",
         _ => "Claude",
     }
 }
 
 /// Every provider the tray menu can offer, in the order the notch shows them.
-pub const TRAY_PROVIDER_IDS: [&str; 5] = ["claude", "codex", "cursor", "grok", "gemini"];
+pub const TRAY_PROVIDER_IDS: [&str; 7] = [
+    "claude", "codex", "cursor", "grok", "gemini", "opencode", "hermes",
+];
 
 /// Keeps the tray menu current. macOS rebuilds its menu as it opens; Tauri has no such hook, so it
 /// is rebuilt whenever a reading changes, and once a minute besides — otherwise "Resets in 12 min"
@@ -1504,7 +1654,11 @@ fn main() {
                 return;
             }
             "doctor" => {
-                let out = if args.get(2).map(|s| s.as_str()) == Some("deep") { diag::run() } else { doctor::run() };
+                let out = if args.get(2).map(|s| s.as_str()) == Some("deep") {
+                    diag::run()
+                } else {
+                    doctor::run()
+                };
                 println!("{out}");
                 let log = config::config_path().with_file_name("doctor.log");
                 let _ = std::fs::write(log, &out);
@@ -1531,6 +1685,8 @@ fn main() {
             codex: Mutex::new(codex::load_persisted()),
             cursor: Mutex::new(cursor::load_persisted()),
             grok: Mutex::new(grok::load_persisted()),
+            opencode: Mutex::new(opencode::load_persisted()),
+            hermes: Mutex::new(hermes::load_persisted()),
             antigravity: Mutex::new(antigravity::load_persisted()),
             glyphs: Mutex::new(Default::default()),
             activity: Mutex::new(Vec::new()),
@@ -1541,6 +1697,8 @@ fn main() {
             get_codex,
             get_cursor,
             get_grok,
+            get_opencode,
+            get_hermes,
             get_antigravity,
             get_glyphs,
             get_activity,
@@ -1604,6 +1762,8 @@ fn main() {
             codex::start(handle.clone());
             cursor::start(handle.clone());
             grok::start(handle.clone());
+            opencode::start(handle.clone());
+            hermes::start(handle.clone());
             antigravity::start(handle.clone());
             activity::start(handle.clone());
             // Collecting glyphs may read icon resources out of a few executables; do it off the main thread and push when done
@@ -1660,7 +1820,11 @@ mod tests {
     fn every_provider_opens_its_own_page() {
         let mut hosts: Vec<&str> = TRAY_PROVIDER_IDS
             .iter()
-            .map(|id| provider_page(id).unwrap_or_else(|| panic!("{id} has no usage page")).1)
+            .map(|id| {
+                provider_page(id)
+                    .unwrap_or_else(|| panic!("{id} has no usage page"))
+                    .1
+            })
             .collect();
         hosts.sort();
         hosts.dedup();
@@ -1671,12 +1835,35 @@ mod tests {
     #[test]
     fn the_taskbar_is_measured_against_the_window() {
         // 3200 × 2000 with a 72 px taskbar along the bottom
-        let s = Screen { name: None, x: 0, y: 0, w: 3200, h: 2000, scale: 1.5, work: (0, 0, 3200, 1928) };
-        assert_eq!(work_insets(&s, 2768, 1376, 432, 624), [0, 0, 72, 0], "right edge, at the bottom");
-        assert_eq!(work_insets(&s, 2768, 512, 432, 624), [0, 0, 0, 0], "right edge, clear of it");
-        assert_eq!(work_insets(&s, 1000, 1928, 624, 624).map(|v| v <= 624), [true; 4], "never more than the window");
+        let s = Screen {
+            name: None,
+            x: 0,
+            y: 0,
+            w: 3200,
+            h: 2000,
+            scale: 1.5,
+            work: (0, 0, 3200, 1928),
+        };
+        assert_eq!(
+            work_insets(&s, 2768, 1376, 432, 624),
+            [0, 0, 72, 0],
+            "right edge, at the bottom"
+        );
+        assert_eq!(
+            work_insets(&s, 2768, 512, 432, 624),
+            [0, 0, 0, 0],
+            "right edge, clear of it"
+        );
+        assert_eq!(
+            work_insets(&s, 1000, 1928, 624, 624).map(|v| v <= 624),
+            [true; 4],
+            "never more than the window"
+        );
         // A taskbar on the left
-        let s = Screen { work: (72, 0, 3128, 2000), ..s };
+        let s = Screen {
+            work: (72, 0, 3128, 2000),
+            ..s
+        };
         assert_eq!(work_insets(&s, 0, 700, 432, 624), [0, 0, 0, 72]);
     }
 
@@ -1684,30 +1871,61 @@ mod tests {
     #[test]
     fn the_notch_is_placed_inside_the_work_area() {
         // 3200 × 2000 with a 72 px taskbar along the bottom
-        let s = Screen { name: None, x: 0, y: 0, w: 3200, h: 2000, scale: 1.5, work: (0, 0, 3200, 1928) };
+        let s = Screen {
+            name: None,
+            x: 0,
+            y: 0,
+            w: 3200,
+            h: 2000,
+            scale: 1.5,
+            work: (0, 0, 3200, 1928),
+        };
         for edge in ["left", "right", "top", "bottom"] {
-            let (ww, wh) = if crate::config::edge_is_vertical(edge) { (432, 624) } else { (624, 624) };
+            let (ww, wh) = if crate::config::edge_is_vertical(edge) {
+                (432, 624)
+            } else {
+                (624, 624)
+            };
             let (x, y) = super::edge_origin(&s, edge, ww, wh, 0.5);
-            assert!(y + wh <= 1928, "{edge}: ({x},{y}) {ww}x{wh} reaches into the taskbar");
-            assert_eq!(work_insets(&s, x, y, ww, wh), [0; 4], "{edge}: nothing covers it");
+            assert!(
+                y + wh <= 1928,
+                "{edge}: ({x},{y}) {ww}x{wh} reaches into the taskbar"
+            );
+            assert_eq!(
+                work_insets(&s, x, y, ww, wh),
+                [0; 4],
+                "{edge}: nothing covers it"
+            );
         }
         // A taskbar on the left moves the left edge in, and leaves the right one where it was
-        let s = Screen { work: (72, 0, 3128, 2000), ..s };
+        let s = Screen {
+            work: (72, 0, 3128, 2000),
+            ..s
+        };
         assert_eq!(super::edge_origin(&s, "left", 432, 624, 0.5).0, 72);
         assert_eq!(super::edge_origin(&s, "right", 432, 624, 0.5).0, 3200 - 432);
         // Nothing usable reported: the whole monitor, as before
-        let s = Screen { work: (0, 0, 0, 0), ..s };
-        assert_eq!(super::edge_origin(&s, "bottom", 624, 624, 1.0), (3200 - 624, 2000 - 624));
+        let s = Screen {
+            work: (0, 0, 0, 0),
+            ..s
+        };
+        assert_eq!(
+            super::edge_origin(&s, "bottom", 624, 624, 1.0),
+            (3200 - 624, 2000 - 624)
+        );
     }
 
     #[test]
-    fn a_flat_notch_is_wide_enough_for_five_rings() {
-        // 5 × 56 px rings + 4 × 14 px gaps + 36 px padding + 2 × 38.7 px fillets + the orb's 28.5 px reach
-        let pill = 5.0 * 56.0 + 4.0 * 14.0 + 36.0 + 2.0 * (38.7 + 28.5);
+    fn a_flat_notch_is_wide_enough_for_seven_rings() {
+        // 7 × 56 px rings + 6 × 14 px gaps + 36 px padding + 2 × 38.7 px fillets + the orb's 28.5 px reach
+        let pill = 7.0 * 56.0 + 6.0 * 14.0 + 36.0 + 2.0 * (38.7 + 28.5);
         for edge in ["top", "bottom"] {
             let (w, h) = notch_window_size(edge);
             assert!(w >= pill, "{edge}: {w} px cannot hold a {pill} px pill");
-            assert_eq!(h, NOTCH_H, "{edge}: the hover card still needs the full height");
+            assert_eq!(
+                h, NOTCH_H,
+                "{edge}: the hover card still needs the full height"
+            );
         }
         for edge in ["left", "right"] {
             assert_eq!(notch_window_size(edge), (NOTCH_W, super::NOTCH_UPRIGHT_H));
@@ -1737,7 +1955,10 @@ mod tests {
         let pill = 5.0 * (56.0 + 6.0 + 21.0) + 4.0 * 14.0 + 36.0;
         for edge in ["left", "right"] {
             let (_, h) = notch_window_size(edge);
-            assert!(h / 2.0 >= pill / 2.0 + 38.7 + 28.5, "{edge}: {h} px leaves no room for the orb");
+            assert!(
+                h / 2.0 >= pill / 2.0 + 38.7 + 28.5,
+                "{edge}: {h} px leaves no room for the orb"
+            );
         }
     }
 
@@ -1780,7 +2001,9 @@ mod tests {
         for x in (CARD[0] + CARD[2]) as i32..WIDE_PILL[0] as i32 {
             let x = x as f64;
             assert!(
-                [WIDE_PILL, TAIL, CARD].iter().any(|r| cursor_in_hot(&[*r], x, y, WIDE)),
+                [WIDE_PILL, TAIL, CARD]
+                    .iter()
+                    .any(|r| cursor_in_hot(&[*r], x, y, WIDE)),
                 "cold at x={x}"
             );
         }
@@ -1802,8 +2025,18 @@ mod tests {
 
     #[test]
     fn the_pad_reaches_slightly_past_the_pill() {
-        assert!(cursor_in_hot(&[PILL], PILL[0] - HOT_PAD + 1.0, 300.0, WINDOW));
-        assert!(!cursor_in_hot(&[PILL], PILL[0] - HOT_PAD - 1.0, 300.0, WINDOW));
+        assert!(cursor_in_hot(
+            &[PILL],
+            PILL[0] - HOT_PAD + 1.0,
+            300.0,
+            WINDOW
+        ));
+        assert!(!cursor_in_hot(
+            &[PILL],
+            PILL[0] - HOT_PAD - 1.0,
+            300.0,
+            WINDOW
+        ));
     }
 
     #[test]
@@ -1819,7 +2052,11 @@ mod tests {
     }
 
     fn win(id: &str, used: f64) -> LimitWindow {
-        LimitWindow { id: id.into(), used, ..Default::default() }
+        LimitWindow {
+            id: id.into(),
+            used,
+            ..Default::default()
+        }
     }
 
     fn pick<'a>(provider: &str, windows: &'a [LimitWindow]) -> Option<&'a str> {
@@ -1832,12 +2069,20 @@ mod tests {
 
     /// The four lanes Antigravity's language server reported on a real machine
     fn bridge() -> [LimitWindow; 4] {
-        [win("gemini-weekly", 0.03), win("gemini-5h", 0.0), win("3p-weekly", 0.5), win("3p-5h", 0.9)]
+        [
+            win("gemini-weekly", 0.03),
+            win("gemini-5h", 0.0),
+            win("3p-weekly", 0.5),
+            win("3p-5h", 0.9),
+        ]
     }
 
     #[test]
     fn claude_means_the_session_even_when_the_week_is_fuller() {
-        assert_eq!(pick("claude", &[win("session", 0.10), win("weekly_all", 0.60)]), Some("session"));
+        assert_eq!(
+            pick("claude", &[win("session", 0.10), win("weekly_all", 0.60)]),
+            Some("session")
+        );
     }
 
     #[test]
@@ -1847,14 +2092,26 @@ mod tests {
 
     #[test]
     fn codex_means_its_first_window_and_cursor_its_included_usage() {
-        assert_eq!(pick("codex", &[win("primary", 0.2), win("secondary", 0.9)]), Some("primary"));
-        assert_eq!(pick("cursor", &[win("included", 0.3), win("api", 0.9)]), Some("included"));
-        assert_eq!(pick("cursor", &[win("api", 0.9), win("on_demand", 0.95)]), Some("api"));
+        assert_eq!(
+            pick("codex", &[win("primary", 0.2), win("secondary", 0.9)]),
+            Some("primary")
+        );
+        assert_eq!(
+            pick("cursor", &[win("included", 0.3), win("api", 0.9)]),
+            Some("included")
+        );
+        assert_eq!(
+            pick("cursor", &[win("api", 0.9), win("on_demand", 0.95)]),
+            Some("api")
+        );
     }
 
     #[test]
     fn antigravity_reads_only_gemini_lanes_unless_told_otherwise() {
-        assert_eq!(lane(&bridge(), "automatic", "gemini"), Some("gemini-weekly"));
+        assert_eq!(
+            lane(&bridge(), "automatic", "gemini"),
+            Some("gemini-weekly")
+        );
         assert_eq!(lane(&bridge(), "automatic", "3p"), Some("3p-5h"));
     }
 
@@ -1871,21 +2128,37 @@ mod tests {
             win("Gemini Models Five Hour Limit", 0.1),
             win("Claude and GPT models Five Hour Limit", 0.7),
         ];
-        assert_eq!(lane(&cli, "5h", "gemini"), Some("Gemini Models Five Hour Limit"));
-        assert_eq!(lane(&cli, "automatic", "3p"), Some("Claude and GPT models Five Hour Limit"));
+        assert_eq!(
+            lane(&cli, "5h", "gemini"),
+            Some("Gemini Models Five Hour Limit")
+        );
+        assert_eq!(
+            lane(&cli, "automatic", "3p"),
+            Some("Claude and GPT models Five Hour Limit")
+        );
     }
 
     #[test]
     fn a_spent_lane_leads_only_once_every_lane_is_spent() {
         let one_spent = [win("gemini-5h", 1.0), win("gemini-weekly", 0.4)];
-        assert_eq!(lane(&one_spent, "automatic", "gemini"), Some("gemini-weekly"));
+        assert_eq!(
+            lane(&one_spent, "automatic", "gemini"),
+            Some("gemini-weekly")
+        );
         let all_spent = [win("gemini-weekly", 1.0), win("gemini-5h", 1.0)];
         assert_eq!(lane(&all_spent, "automatic", "gemini"), Some("gemini-5h"));
     }
 
     #[test]
     fn a_request_count_still_leads_when_it_is_all_there_is() {
-        let requests = LimitWindow { id: "requests".into(), count: Some(79), ..Default::default() };
-        assert_eq!(pick("gemini", std::slice::from_ref(&requests)), Some("requests"));
+        let requests = LimitWindow {
+            id: "requests".into(),
+            count: Some(79),
+            ..Default::default()
+        };
+        assert_eq!(
+            pick("gemini", std::slice::from_ref(&requests)),
+            Some("requests")
+        );
     }
 }

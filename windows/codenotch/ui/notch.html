@@ -203,7 +203,7 @@
     <div class="h-disc"></div>
     <svg class="h-glyph" viewBox="0 0 12 12" aria-hidden="true"><path fill-rule="evenodd" d="M5.1.6h1.8l.3 1.5 1.1.5 1.3-.8 1.3 1.3-.8 1.3.5 1.1 1.5.3v1.8l-1.5.3-.5 1.1.8 1.3-1.3 1.3-1.3-.8-1.1.5-.3 1.5H5.1l-.3-1.5-1.1-.5-1.3.8-1.3-1.3.8-1.3-.5-1.1L.6 6.9V5.1l1.5-.3.5-1.1-.8-1.3 1.3-1.3 1.3.8 1.1-.5zM6 4.1a1.9 1.9 0 1 0 0 3.8 1.9 1.9 0 0 0 0-3.8z"/></svg>
   </div>
-  <div id="pill"></div><!-- one .cell per provider, stacked vertically (upstream: data-driven, the same layout for 1–5 cells) -->
+  <div id="pill"></div><!-- one .cell per provider, stacked vertically (upstream: data-driven, the same layout for 1–7 cells) -->
   <div id="notice"></div>
 </div>
 <script>
@@ -225,6 +225,15 @@ function smallPct(v){
   return t.toFixed(1);
 }
 function pctText(f){ const v=f*100; return v>0&&v<1?smallPct(v):String(Math.round(v)); }
+// Counts print compacted (651k, 1.1M), the Mac's rule for its counted figures: a 56 px ring cannot
+// hold seven digits, and below 10 000 the digits stay verbatim so no existing count changes.
+function compactCount(n){
+  n=Math.max(0,Math.round(n));
+  if(n<10000) return String(n);
+  if(n<1000000) return Math.round(n/1000)+'k';
+  const m=Math.round(n/100000)/10;
+  return (m>=100?String(Math.round(m)):m.toFixed(1))+'M';
+}
 // Both ends, since vendors disagree on which they print; the left half comes from the rounded used half, as their dashboards do
 function usedCopy(w){
   const v=w.used*100;
@@ -240,6 +249,10 @@ let codexSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let cursorSnap={status:'absent',windows:[],fetched_at:0,note:''};
 // Grok Build credits, from the Grok CLI's own session; absent until that CLI is signed in
 let grokSnap={status:'absent',windows:[],fetched_at:0,note:''};
+// OpenCode's Go plan windows, from its official endpoint with the key OpenCode stores; absent until that key exists
+let opencodeSnap={status:'absent',windows:[],fetched_at:0,note:''};
+// Tokens the Hermes agent recorded for itself, counted from its own databases
+let hermesSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let agSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let glyphs={}; // id → {kind:'mark'|'appicon', url}
 let activity=[]; // working state of the non-Claude providers: {provider,state:'busy'|'waiting',name,detail,since}
@@ -315,6 +328,11 @@ const TEXT={
     'Sign in to Cursor to see usage.':'Увійдіть у Cursor, щоб бачити використання.',
     'Sign in to Codex to see usage.':'Увійдіть у Codex, щоб бачити використання.',
     'Sign in to Antigravity to see usage.':'Увійдіть в Antigravity, щоб бачити використання.',
+    'Run opencode auth login to see usage.':'Виконайте opencode auth login, щоб бачити використання.',
+    '5h limit':'Ліміт 5 год',
+    'Tokens this month':'Токенів за місяць',
+    'Tokens today':'Токенів сьогодні',
+    'tokens':'токенів',
     'needs your input':'потрібна ваша відповідь',
     'Working in':'Працює в'
   },
@@ -355,6 +373,11 @@ const TEXT={
     'Sign in to Codex to see usage.':'Войдите в Codex, чтобы увидеть использование.',
     'Sign in to Antigravity to see usage.':'Войдите в Antigravity, чтобы увидеть использование.',
     'Run grok login to see usage.':'Выполните grok login, чтобы увидеть использование.',
+    'Run opencode auth login to see usage.':'Выполните opencode auth login, чтобы увидеть использование.',
+    '5h limit':'Лимит на 5 ч',
+    'Tokens this month':'Токенов за месяц',
+    'Tokens today':'Токенов сегодня',
+    'tokens':'токенов',
     'needs your input':'требуется ваш ответ',
     'Working in':'Работает в'
   },
@@ -395,6 +418,11 @@ const TEXT={
     'Sign in to Codex to see usage.':'请登录 Codex 以查看用量。',
     'Sign in to Antigravity to see usage.':'请登录 Antigravity 以查看用量。',
     'Run grok login to see usage.':'请运行 grok login 以查看用量。',
+    'Run opencode auth login to see usage.':'请运行 opencode auth login 以查看用量。',
+    '5h limit':'5 小时额度',
+    'Tokens this month':'本月 Token 用量',
+    'Tokens today':'今日 Token 用量',
+    'tokens':'token',
     'needs your input':'等待你的输入',
     'Working in':'工作于',
   },
@@ -435,6 +463,11 @@ const TEXT={
     'Sign in to Codex to see usage.':'請登入 Codex 以查看用量。',
     'Sign in to Antigravity to see usage.':'請登入 Antigravity 以查看用量。',
     'Run grok login to see usage.':'請執行 grok login 以查看用量。',
+    'Run opencode auth login to see usage.':'請執行 opencode auth login 以查看用量。',
+    '5h limit':'5 小時額度',
+    'Tokens this month':'本月 Token 用量',
+    'Tokens today':'今日 Token 用量',
+    'tokens':'token',
     'needs your input':'等待你的輸入',
     'Working in':'工作於',
   },
@@ -670,6 +703,8 @@ function providers(){
   if(cursorSnap.status!=='absent') list.push({id:'cursor',name:'Cursor',glyph:'Cu',snap:cursorSnap});
   if(grokSnap.status!=='absent') list.push({id:'grok',name:'Grok',glyph:'Gk',snap:grokSnap});
   if(agSnap.status!=='absent') list.push({id:'gemini',name:'Antigravity',glyph:'Ag',snap:agSnap});
+  if(opencodeSnap.status!=='absent') list.push({id:'opencode',name:'OpenCode',glyph:'Oc',snap:opencodeSnap});
+  if(hermesSnap.status!=='absent') list.push({id:'hermes',name:'Hermes',glyph:'He',snap:hermesSnap});
   if(Array.isArray(notchSlots)&&notchSlots.length){
     const picked=list.filter(p=>!!slotFor(p.id));
     // Never leave the notch with nothing in it: an empty result means the choice no longer matches
@@ -699,6 +734,8 @@ function headlineOf(snap,id){
   if(id==='codex') return ws[0];
   if(id==='cursor') return byId('included')||byId('api');
   if(id==='grok') return byId('credits')||ws[0];
+  if(id==='opencode') return byId('rolling')||ws[0];
+  if(id==='hermes') return byId('month')||ws[0]; // a counted month: the cell shows ~tokens, not a percentage
   const fam=ws.filter(w=>laneFamily(w)===agPrefs.model), lanes=fam.length?fam:ws;
   if(agPrefs.limit!=='automatic'){ const w=tightestOf(lanes.filter(w=>laneIs(w,agPrefs.limit))); if(w) return w; }
   return tightestOf(lanes.filter(w=>w.used<1))||tightestOf(lanes)||lanes[0];
@@ -712,6 +749,8 @@ function weeklyOf(snap,id){
   if(id==='codex') return byId('secondary');
   if(id==='cursor') return null;
   if(id==='grok') return null; // the credits window is already the weekly one
+  if(id==='opencode') return byId('weekly');
+  if(id==='hermes') return null; // nothing here publishes a week
   const fam=ws.filter(w=>laneFamily(w)===agPrefs.model), lanes=fam.length?fam:ws;
   return tightestOf(lanes.filter(w=>laneIs(w,'weekly')));
 }
@@ -769,7 +808,7 @@ function renderRing(){
       else activity.innerHTML='';
     }
     if(p.snap.status==='needsAuth'||p.snap.status==='none') pct.textContent='—';
-    else if(h && h.count!=null) pct.textContent='~'+h.count;
+    else if(h && h.count!=null) pct.textContent='~'+compactCount(h.count);
     else if(h) pct.textContent=(h.derived?'~':'')+pctText(h.used)+'%';
     else pct.textContent=p.snap.windows.length?'—':'…'; // its declared window is missing: a dash, not a wait
     glyph.classList.toggle('dim', !!(h && h.used>=1));
@@ -816,7 +855,7 @@ function renderCard(){
   let html=`<div class="c-head">${headIcon}<span class="c-title">${ui().title(p.name)}</span></div>`;
   if(staleOf(snap)&&snap.fetched_at) html+=`<div class="c-sub">${textCopy('Updated')} ${ago(snap.fetched_at)}</div>`;
   if(snap.status==='needsAuth'){
-    const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',grok:'Run grok login to see usage.',gemini:'Sign in to Antigravity to see usage.'}[p.id]||'';
+    const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',grok:'Run grok login to see usage.',opencode:'Run opencode auth login to see usage.',gemini:'Sign in to Antigravity to see usage.'}[p.id]||'';
     html+=`<div class="c-note">${textCopy(who)}<br>${esc(textCopy(snap.note||''))}</div>`;
   }else if(!snap.windows.length){
     html+=`<div class="c-note">${esc(textCopy(snap.note||'Waiting for first reading…'))}</div>`;
@@ -830,8 +869,12 @@ function renderCard(){
         if(group) html+=`<div class="g-head">${esc(textCopy(group))}</div><div class="g-box">`;
       }
       if(w.count!=null){
+        // A counted window: the unit is the provider's ("tokens" for Hermes); without one the card
+        // keeps its own wording for Antigravity's requests. A zero with a unit is a reading.
+        const unit=w.unit?esc(textCopy(w.unit)):textCopy(w.count===1?'request today':'requests today');
+        const body=w.unit?`~${compactCount(w.count)} ${unit}`:(w.count>0?`~${w.count} ${unit}`:textCopy('no requests today'));
         html+=`<div class="win"><div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span></div>
-          <div class="w-used">${w.count>0?`~${w.count} ${textCopy(w.count===1?'request today':'requests today')}`:textCopy('no requests today')}</div></div>`;
+          <div class="w-used">${body}</div></div>`;
         continue;
       }
       html+=`<div class="win">
@@ -939,7 +982,7 @@ function armWatchdog(){
 // The design width is the window's, and the window is not the same shape on every edge — see
 // `notch_window_size` in main.rs: NOTCH_W upright, NOTCH_H lying flat. Dividing by 360 on a flat edge
 // read the wider window as a DPR error and zoomed the whole notch by 520/360.
-const DESIGN_W_UPRIGHT=360, DESIGN_W_FLAT=520;
+const DESIGN_W_UPRIGHT=360, DESIGN_W_FLAT=660;
 function designWidth(){ return edgeIsVertical()?DESIGN_W_UPRIGHT:DESIGN_W_FLAT; }
 function fitZoom(){
   const z=innerWidth/designWidth();
@@ -1142,6 +1185,10 @@ listen('cursor',e=>{cursorSnap=e.payload||cursorSnap;settle('cursor');renderRing
 invoke('get_cursor').then(u=>{cursorSnap=u||cursorSnap;renderRing();}).catch(()=>{});
 listen('grok',e=>{grokSnap=e.payload||grokSnap;settle('grok');renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
 invoke('get_grok').then(u=>{grokSnap=u||grokSnap;renderRing();}).catch(()=>{});
+listen('opencode',e=>{opencodeSnap=e.payload||opencodeSnap;settle('opencode');renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+invoke('get_opencode').then(u=>{opencodeSnap=u||opencodeSnap;renderRing();}).catch(()=>{});
+listen('hermes',e=>{hermesSnap=e.payload||hermesSnap;settle('hermes');renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+invoke('get_hermes').then(u=>{hermesSnap=u||hermesSnap;renderRing();}).catch(()=>{});
 
 listen('antigravity',e=>{agSnap=e.payload||agSnap;settle('gemini');renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
 invoke('get_antigravity').then(u=>{agSnap=u||agSnap;renderRing();}).catch(()=>{});
