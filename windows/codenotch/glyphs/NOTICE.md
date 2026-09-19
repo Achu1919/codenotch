@@ -1,7 +1,8 @@
 # Provider marks
 
 The SVG files in this directory come from the npm package `@lobehub/icons-static-svg` 1.95.0
-(https://github.com/lobehub/lobe-icons, MIT License) and are unmodified:
+(https://github.com/lobehub/lobe-icons, MIT License) and are unmodified — except `hermes.svg`,
+which is this port's own mark and carries no third-party trademark:
 
 | File | Original file in the package | Shown in |
 |---|---|---|
@@ -12,6 +13,8 @@ The SVG files in this directory come from the npm package `@lobehub/icons-static
 | grok.svg | icons/grok.svg | Grok cell |
 | gemini.svg | icons/antigravity.svg | Antigravity cell |
 | gemini-alt.svg | icons/gemini.svg | alternative: the Gemini spark |
+| opencode.svg | icons/opencode.svg | OpenCode cell |
+| hermes.svg | — drawn for this port | Hermes cell (a neutral monogram: two strokes and a crossbar) |
 
 MIT License — Copyright (c) LobeHub. See that repository's LICENSE.
 

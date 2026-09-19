@@ -18,6 +18,8 @@ documented behaviour and the wire formats.
 | **Cursor** | The editor's own session from `state.vscdb` → `cursor.com/api/usage-summary` | Included usage / API usage / on-demand, reset at billing-cycle end. Nothing to sign into: it borrows the editor's session, so there is only ever one account. |
 | **Grok** | The Grok CLI's own session in `~/.grok/auth.json` (read only, never refreshed) → `cli-chat-proxy.grok.com/v1/billing?format=credits`, the endpoint that CLI's own `/usage` asks | The weekly Grok Build allowance, with the account on the hover card. Only a session minted by `auth.x.ai` is used — the file can also hold a customer IdP token meant for that customer's private proxy. A fresh weekly period reads 0 %, not "unmetered". |
 | **Antigravity** | Official `agy` CLI `/usage` print when installed; otherwise the existing local `language_server` bridge, Google Cloud Code API, or transcript model count | Official four quota rows (Gemini & Claude/GPT 5h/weekly) without running the full IDE. When CLI is absent, falls back to legacy local bridge/API. |
+| **OpenCode** | The Go plan's official usage endpoint, with the `opencode-go` key OpenCode itself stores on sign-in (or `OPENCODE_GO_API_KEY`) | The account's 5-hour, weekly and monthly windows — the same figures the OpenCode dashboard shows. A 429 backs off 60 s × 2^n capped at 15 min, the deadline persisted; a key without a Go plan reads as "nothing metered", never as an error. |
+| **Hermes** | The Hermes agent's own `session_model_usage` table, summed over every profile database under `%LOCALAPPDATA%\hermes` | Tokens Hermes recorded for itself — this month, today, and the busiest models. A counted reading (`~`), because no allowance is published to meter it against; reasoning tokens are excluded because Hermes counts them inside output. |
 
 Providers that are not installed simply do not get a cell.
 
@@ -91,7 +93,7 @@ attached falls back to the primary one, so unplugging a screen cannot strand the
 
 Provider marks are the SVGs from [`@lobehub/icons-static-svg`](https://github.com/lobehub/lobe-icons)
 (MIT), embedded unmodified — see `codenotch/glyphs/NOTICE.md`. Drop your own
-`claude|codex|cursor|gemini.svg` (or `.png`) into `%APPDATA%\codenotch\glyphs\` to override.
+`claude|codex|cursor|grok|gemini|opencode|hermes.svg` (or `.png`) into `%APPDATA%\codenotch\glyphs\` to override.
 The marks remain the trademarks of their owners.
 
 ### Translations
